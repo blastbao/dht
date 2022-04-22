@@ -57,9 +57,7 @@ func DecodeString(data []byte, start int) (
 }
 
 // DecodeInt decodes int value in the data.
-func DecodeInt(data []byte, start int) (
-	result interface{}, index int, err error) {
-
+func DecodeInt(data []byte, start int) (result interface{}, index int, err error) {
 	if start >= len(data) || data[start] != 'i' {
 		err = errors.New("invalid int bencode")
 		return
@@ -82,11 +80,13 @@ func DecodeInt(data []byte, start int) (
 }
 
 // decodeItem decodes an item of dict or list.
-func decodeItem(data []byte, i int) (
-	result interface{}, index int, err error) {
+func decodeItem(data []byte, i int) (result interface{}, index int, err error) {
 
 	var decodeFunc = []func([]byte, int) (interface{}, int, error){
-		DecodeString, DecodeInt, DecodeList, DecodeDict,
+		DecodeString,
+		DecodeInt,
+		DecodeList,
+		DecodeDict,
 	}
 
 	for _, f := range decodeFunc {
@@ -195,11 +195,15 @@ func Decode(data []byte) (result interface{}, err error) {
 }
 
 // EncodeString encodes a string value.
+//
+// data="abc" => encode(data)="3:abc"
 func EncodeString(data string) string {
 	return strings.Join([]string{strconv.Itoa(len(data)), data}, ":")
 }
 
 // EncodeInt encodes a int value.
+//
+// data="123" => encode(data)="i123e"
 func EncodeInt(data int) string {
 	return strings.Join([]string{"i", strconv.Itoa(data), "e"}, "")
 }
@@ -222,6 +226,8 @@ func encodeItem(data interface{}) (item string) {
 }
 
 // EncodeList encodes a list value.
+//
+// data=[123, "abc"] => encode(data)= "li123e3:abce"
 func EncodeList(data []interface{}) string {
 	result := make([]string, len(data))
 
@@ -233,13 +239,13 @@ func EncodeList(data []interface{}) string {
 }
 
 // EncodeDict encodes a dict value.
+//
+// data={"a":123, "b":"abc"] => encode(data)= "d1:ai123e1b3:abce"
 func EncodeDict(data map[string]interface{}) string {
 	result, i := make([]string, len(data)), 0
 
 	for key, val := range data {
-		result[i] = strings.Join(
-			[]string{EncodeString(key), encodeItem(val)},
-			"")
+		result[i] = strings.Join([]string{EncodeString(key), encodeItem(val)}, "")
 		i++
 	}
 
@@ -247,6 +253,8 @@ func EncodeDict(data map[string]interface{}) string {
 }
 
 // Encode encodes a string, int, dict or list value to a bencoded string.
+//
+// 将 data 编码成 BT 协议字符串
 func Encode(data interface{}) string {
 	switch v := data.(type) {
 	case string:

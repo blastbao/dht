@@ -97,41 +97,51 @@ func (tm *tokenManager) check(addr *net.UDPAddr, tokenString string) bool {
 }
 
 // makeQuery returns a query-formed data.
+//
+// 构造查询请求
 func makeQuery(t, q string, a map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
-		"t": t,
-		"y": "q",
-		"q": q,
-		"a": a,
+		"t": t,		// transactionID
+		"y": "q",	// query
+		"q": q,		// query type
+		"a": a,		// params
 	}
 }
 
 // makeResponse returns a response-formed data.
+//
+// 构造响应
 func makeResponse(t string, r map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
-		"t": t,
-		"y": "r",
-		"r": r,
+		"t": t,		// transactionID
+		"y": "r",	// response
+		"r": r,		// params
 	}
 }
 
 // makeError returns a err-formed data.
 func makeError(t string, errCode int, errMsg string) map[string]interface{} {
 	return map[string]interface{}{
-		"t": t,
-		"y": "e",
-		"e": []interface{}{errCode, errMsg},
+		"t": t,				// transactionID
+		"y": "e",			// error
+		"e": []interface{}{ // error detail
+			errCode,
+			errMsg,
+		},
 	}
 }
 
 // send sends data to the udp.
 func send(dht *DHT, addr *net.UDPAddr, data map[string]interface{}) error {
+	// 超时控制
 	dht.conn.SetWriteDeadline(time.Now().Add(time.Second * 15))
-
+	// 发送 udp 报文到 addr
 	_, err := dht.conn.WriteToUDP([]byte(Encode(data)), addr)
 	if err != nil {
+		// 出错则写入黑名单
 		dht.blackList.insert(addr.IP.String(), -1)
 	}
+	// 返回
 	return err
 }
 
@@ -369,11 +379,14 @@ func (tm *transactionManager) announcePeer(
 // ParseKey parses the key in dict data. `t` is type of the keyed value.
 // It's one of "int", "string", "map", "list".
 func ParseKey(data map[string]interface{}, key string, t string) error {
+
+	// 从 data 中提取 key ，不存在则报错
 	val, ok := data[key]
 	if !ok {
 		return errors.New("lack of key")
 	}
 
+	// 数据类型转换
 	switch t {
 	case "string":
 		_, ok = val.(string)
@@ -387,6 +400,7 @@ func ParseKey(data map[string]interface{}, key string, t string) error {
 		panic("invalid type")
 	}
 
+	// 类型错误，报错返回
 	if !ok {
 		return errors.New("invalid key type")
 	}
@@ -395,10 +409,13 @@ func ParseKey(data map[string]interface{}, key string, t string) error {
 }
 
 // ParseKeys parses keys. It just wraps ParseKey.
+//
+// 检查 data 是否包含 pairs 指定的字段及类型
 func ParseKeys(data map[string]interface{}, pairs [][]string) error {
 	for _, args := range pairs {
-		key, t := args[0], args[1]
-		if err := ParseKey(data, key, t); err != nil {
+		key, typ := args[0], args[1]
+		// 检查 data[key] 是否是 typ 类型，如果 key 不存在或者类型错误，若报错
+		if err := ParseKey(data, key, typ); err != nil {
 			return err
 		}
 	}
@@ -408,35 +425,38 @@ func ParseKeys(data map[string]interface{}, pairs [][]string) error {
 // parseMessage parses the basic data received from udp.
 // It returns a map value.
 func parseMessage(data interface{}) (map[string]interface{}, error) {
+	// 检查是否为 dict 类型
 	response, ok := data.(map[string]interface{})
 	if !ok {
 		return nil, errors.New("response is not dict")
 	}
-
-	if err := ParseKeys(
-		response, [][]string{{"t", "string"}, {"y", "string"}}); err != nil {
+	// 确保 response 保护 string 类型的 t 和 y 字段
+	if err := ParseKeys(response, [][]string{{"t", "string"}, {"y", "string"}}); err != nil {
 		return nil, err
 	}
-
 	return response, nil
 }
 
 // handleRequest handles the requests received from udp.
-func handleRequest(dht *DHT, addr *net.UDPAddr,
-	response map[string]interface{}) (success bool) {
+//
+// 处理请求
+func handleRequest(dht *DHT, addr *net.UDPAddr, response map[string]interface{}) (success bool) {
 
+	// transId
 	t := response["t"].(string)
 
-	if err := ParseKeys(
-		response, [][]string{{"q", "string"}, {"a", "map"}}); err != nil {
-
+	// 参数校验
+	if err := ParseKeys(response, [][]string{{"q", "string"}, {"a", "map"}}); err != nil {
+		// 字段非法，报错返回
 		send(dht, addr, makeError(t, protocolError, err.Error()))
 		return
 	}
 
+	// 提取参数
 	q := response["q"].(string)
 	a := response["a"].(map[string]interface{})
 
+	// 参数校验
 	if err := ParseKey(a, "id", "string"); err != nil {
 		send(dht, addr, makeError(t, protocolError, err.Error()))
 		return
@@ -444,43 +464,49 @@ func handleRequest(dht *DHT, addr *net.UDPAddr,
 
 	id := a["id"].(string)
 
+	// 本机？
 	if id == dht.node.id.RawString() {
 		return
 	}
 
+	// 合法性检查
 	if len(id) != 20 {
 		send(dht, addr, makeError(t, protocolError, "invalid id"))
 		return
 	}
 
-	if no, ok := dht.routingTable.GetNodeByAddress(addr.String()); ok &&
-		no.id.RawString() != id {
-
+	// 路由查找，检查 id 是否匹配
+	if no, ok := dht.routingTable.GetNodeByAddress(addr.String()); ok && no.id.RawString() != id {
+		// 加入黑名单
 		dht.blackList.insert(addr.IP.String(), addr.Port)
+		// 移除路由
 		dht.routingTable.RemoveByAddr(addr.String())
-
 		send(dht, addr, makeError(t, protocolError, "invalid id"))
 		return
 	}
 
+	// query type
 	switch q {
 	case pingType:
+		// 返回本机 ID
 		send(dht, addr, makeResponse(t, map[string]interface{}{
 			"id": dht.id(id),
 		}))
 	case findNodeType:
 		if dht.IsStandardMode() {
+
+			// 提取 target 参数
 			if err := ParseKey(a, "target", "string"); err != nil {
 				send(dht, addr, makeError(t, protocolError, err.Error()))
 				return
 			}
-
 			target := a["target"].(string)
 			if len(target) != 20 {
 				send(dht, addr, makeError(t, protocolError, "invalid target"))
 				return
 			}
 
+			// 计算
 			var nodes string
 			targetID := newBitmapFromString(target)
 
@@ -580,7 +606,7 @@ func handleRequest(dht *DHT, addr *net.UDPAddr,
 			dht.OnAnnouncePeer(infoHash, addr.IP.String(), port)
 		}
 	default:
-		//		send(dht, addr, makeError(t, protocolError, "invalid q"))
+		//	send(dht, addr, makeError(t, protocolError, "invalid q"))
 		return
 	}
 
@@ -637,11 +663,11 @@ func findOn(dht *DHT, r map[string]interface{}, target *bitmap,
 }
 
 // handleResponse handles responses received from udp.
-func handleResponse(dht *DHT, addr *net.UDPAddr,
-	response map[string]interface{}) (success bool) {
-
+func handleResponse(dht *DHT, addr *net.UDPAddr, response map[string]interface{}) (success bool) {
+	// transId
 	t := response["t"].(string)
 
+	//
 	trans := dht.transactionManager.filterOne(t, addr)
 	if trans == nil {
 		return
@@ -746,9 +772,9 @@ func handleError(dht *DHT, addr *net.UDPAddr,
 }
 
 var handlers = map[string]func(*DHT, *net.UDPAddr, map[string]interface{}) bool{
-	"q": handleRequest,
-	"r": handleResponse,
-	"e": handleError,
+	"q": handleRequest,	// request
+	"r": handleResponse,// response
+	"e": handleError,	// error
 }
 
 // handle handles packets received from udp.
@@ -757,27 +783,32 @@ func handle(dht *DHT, pkt packet) {
 		return
 	}
 
+	// 并发控制：获取令牌
 	dht.workerTokens <- struct{}{}
-
 	go func() {
+		// 并发控制：释放令牌
 		defer func() {
 			<-dht.workerTokens
 		}()
 
+		// 来自黑名单，则直接返回
 		if dht.blackList.in(pkt.raddr.IP.String(), pkt.raddr.Port) {
 			return
 		}
 
+		// 解析 BT 协议
 		data, err := Decode(pkt.data)
 		if err != nil {
 			return
 		}
 
+		// 解析 Dict
 		response, err := parseMessage(data)
 		if err != nil {
 			return
 		}
 
+		// 获取 handler 并执行
 		if f, ok := handlers[response["y"].(string)]; ok {
 			f(dht, pkt.raddr, response)
 		}

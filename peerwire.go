@@ -32,15 +32,22 @@ const (
 	HANDSHAKE = 0
 )
 
+// 握手包前缀
 var handshakePrefix = []byte{
-	19, 66, 105, 116, 84, 111, 114, 114, 101, 110, 116, 32, 112, 114,
-	111, 116, 111, 99, 111, 108, 0, 0, 0, 0, 0, 16, 0, 1,
+	19,   66, 105, 116, 84,
+	111, 114, 114, 101, 110,
+	116,  32, 112, 114, 111,
+	116, 111,  99, 111, 108,
+	  0,   0,  0,    0,   0,
+	 16,   0,  1,
 }
 
 // read reads size-length bytes from conn to data.
 func read(conn *net.TCPConn, size int, data *bytes.Buffer) error {
+	// 超时 15s
 	conn.SetReadDeadline(time.Now().Add(time.Second * 15))
 
+	// 从 conn 读取 size Bytes 数据到 data 中
 	n, err := io.CopyN(data, conn, int64(size))
 	if err != nil || n != int64(size) {
 		return errors.New("read error")
@@ -49,18 +56,19 @@ func read(conn *net.TCPConn, size int, data *bytes.Buffer) error {
 }
 
 // readMessage gets a message from the tcp connection.
-func readMessage(conn *net.TCPConn, data *bytes.Buffer) (
-	length int, err error) {
-
+func readMessage(conn *net.TCPConn, data *bytes.Buffer) (length int, err error) {
+	// 读取 length
 	if err = read(conn, 4, data); err != nil {
 		return
 	}
 
+	// 解析 length
 	length = int(bytes2int(data.Next(4)))
 	if length == 0 {
 		return
 	}
 
+	// 读取 body
 	if err = read(conn, length, data); err != nil {
 		return
 	}
@@ -71,9 +79,11 @@ func readMessage(conn *net.TCPConn, data *bytes.Buffer) (
 func sendMessage(conn *net.TCPConn, data []byte) error {
 	length := int32(len(data))
 
+	// 发送 length
 	buffer := bytes.NewBuffer(nil)
 	binary.Write(buffer, binary.BigEndian, length)
 
+	// 发送 data
 	conn.SetWriteDeadline(time.Now().Add(time.Second * 10))
 	_, err := conn.Write(append(buffer.Bytes(), data...))
 	return err
@@ -81,11 +91,13 @@ func sendMessage(conn *net.TCPConn, data []byte) error {
 
 // sendHandshake sends handshake message to conn.
 func sendHandshake(conn *net.TCPConn, infoHash, peerID []byte) error {
+	// 构造握手包
 	data := make([]byte, 68)
-	copy(data[:28], handshakePrefix)
-	copy(data[28:48], infoHash)
-	copy(data[48:], peerID)
+	copy(data[:28], handshakePrefix)	// 握手包前缀
+	copy(data[28:48], infoHash)			// hash
+	copy(data[48:], peerID)				// peer id
 
+	// 发送握手包
 	conn.SetWriteDeadline(time.Now().Add(time.Second * 10))
 	_, err := conn.Write(data)
 	return err
@@ -93,6 +105,7 @@ func sendHandshake(conn *net.TCPConn, infoHash, peerID []byte) error {
 
 // onHandshake handles the handshake response.
 func onHandshake(data []byte) (err error) {
+	// 检查握手包前缀
 	if !(bytes.Equal(handshakePrefix[:20], data[:20]) && data[25]&0x10 != 0) {
 		err = errors.New("invalid handshake response")
 	}
@@ -102,7 +115,7 @@ func onHandshake(data []byte) (err error) {
 // sendExtHandshake requests for the ut_metadata and metadata_size.
 func sendExtHandshake(conn *net.TCPConn) error {
 	data := append(
-		[]byte{EXTENDED, HANDSHAKE},
+		[]byte{ EXTENDED, HANDSHAKE },
 		Encode(map[string]interface{}{
 			"m": map[string]interface{}{"ut_metadata": 1},
 		})...,
