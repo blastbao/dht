@@ -25,11 +25,13 @@ func newNode(id, network, address string) (*node, error) {
 		return nil, errors.New("node id should be a 20-length string")
 	}
 
+	// 通过 net.ResolveUDPAddr 创建监听地址
 	addr, err := net.ResolveUDPAddr(network, address)
 	if err != nil {
 		return nil, err
 	}
 
+	//
 	return &node{newBitmapFromString(id), addr, time.Now()}, nil
 }
 

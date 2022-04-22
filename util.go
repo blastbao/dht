@@ -82,14 +82,18 @@ func encodeCompactIPPortInfo(ip net.IP, port int) (info string, err error) {
 }
 
 // getLocalIPs returns local ips.
+//
+// 获取本地 IP 地址
 func getLocalIPs() (ips []string) {
 	ips = make([]string, 0, 6)
 
+	// 本地网卡地址
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return
 	}
 
+	// 解析 IP 地址
 	for _, addr := range addrs {
 		ip, _, err := net.ParseCIDR(addr.String())
 		if err != nil {

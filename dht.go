@@ -135,6 +135,7 @@ func New(config *Config) *DHT {
 		config = NewStandardConfig()
 	}
 
+	// 网络节点
 	node, err := newNode(randomString(20), config.Network, config.Address)
 	if err != nil {
 		panic(err)
@@ -148,15 +149,16 @@ func New(config *Config) *DHT {
 		workerTokens: make(chan struct{}, config.PacketWorkerLimit),
 	}
 
+	// IP 黑名单
 	for _, ip := range config.BlockedIPs {
 		d.blackList.insert(ip, -1)
 	}
 
 	go func() {
+		// 获取本地 IP 地址，添加到黑名单
 		for _, ip := range getLocalIPs() {
 			d.blackList.insert(ip, -1)
 		}
-
 		ip, err := getRemoteIP()
 		if err != nil {
 			d.blackList.insert(ip, -1)
@@ -178,18 +180,33 @@ func (dht *DHT) IsCrawlMode() bool {
 
 // init initializes global varables.
 func (dht *DHT) init() {
+
+	// 监听本地地址，本函数用于监听 ip、udp、unix（DGRAM）等协议，返回一个 PacketConn 接口。
+	// 根据协议不同，本接口可能返回 net.IPCon、net.UDPConn、net.UnixConn 等，但它们都实现了 PacketConn 接口。
 	listener, err := net.ListenPacket(dht.Network, dht.Address)
 	if err != nil {
 		panic(err)
 	}
 
+	// 提取连接
 	dht.conn = listener.(*net.UDPConn)
-	dht.routingTable = newRoutingTable(dht.KBucketSize, dht)
-	dht.peersManager = newPeersManager(dht)
-	dht.tokenManager = newTokenManager(dht.TokenExpiredAfter, dht)
-	dht.transactionManager = newTransactionManager(
-		dht.MaxTransactionCursor, dht)
 
+	// 初始化路由表
+	dht.routingTable = newRoutingTable(dht.KBucketSize, dht)
+
+	// 连接管理器
+	dht.peersManager = newPeersManager(dht)
+
+	// 口令管理器
+	dht.tokenManager = newTokenManager(dht.TokenExpiredAfter, dht)
+
+	// 事务管理器
+	dht.transactionManager = newTransactionManager(
+		dht.MaxTransactionCursor,
+		dht,
+	)
+
+	// 启动各个管理器
 	go dht.transactionManager.run()
 	go dht.tokenManager.clear()
 	go dht.blackList.clear()
@@ -197,15 +214,19 @@ func (dht *DHT) init() {
 
 // join makes current node join the dht network.
 func (dht *DHT) join() {
+	// 遍历主节点
 	for _, addr := range dht.PrimeNodes {
+		// 解析 UDP 地址
 		raddr, err := net.ResolveUDPAddr(dht.Network, addr)
 		if err != nil {
 			continue
 		}
-
 		// NOTE: Temporary node has NOT node id.
+		// 查找对应节点
 		dht.transactionManager.findNode(
-			&node{addr: raddr},
+			&node{
+				addr: raddr,
+			},
 			dht.node.id.RawString(),
 		)
 	}
@@ -220,7 +241,6 @@ func (dht *DHT) listen() {
 			if err != nil {
 				continue
 			}
-
 			dht.packets <- packet{buff[:n], raddr}
 		}
 	}()
