@@ -536,7 +536,7 @@ func handleRequest(dht *DHT, addr *net.UDPAddr, response map[string]interface{})
 			targetID := newBitmapFromString(target)
 
 			//
-			no, _ := dht.routingTable.GetNodeKBucktByID(targetID)
+			no, _ := dht.routingTable.GetNodeKBucketByID(targetID)
 
 			var nodes string
 			if no != nil {

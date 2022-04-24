@@ -131,36 +131,36 @@ func (pm *peersManager) Insert(infoHash string, peer *Peer) {
 
 // GetPeers returns size-length peers who announces having infoHash.
 func (pm *peersManager) GetPeers(infoHash string, size int) []*Peer {
-
 	peers := make([]*Peer, 0, size)
 
-
-	//
+	// 根据 infoHash 查找缓存
 	v, ok := pm.table.Get(infoHash)
 	if !ok {
 		return peers
 	}
 
-	//
+	// 转换 peers 列表
 	for e := range v.(*keyedDeque).Iter() {
 		peers = append(peers, e.Value.(*Peer))
 	}
 
-
+	// 截断
 	if len(peers) > size {
 		peers = peers[len(peers)-size:]
 	}
-
 
 	return peers
 }
 
 // kbucket represents a k-size bucket.
+//
+// k-桶
 type kbucket struct {
 	sync.RWMutex
-	nodes, candidates *keyedDeque
-	lastChanged       time.Time
-	prefix            *bitmap
+	nodes       *keyedDeque	//
+	candidates  *keyedDeque //
+	lastChanged time.Time   // 最后更新时间
+	prefix      *bitmap     // 前缀
 }
 
 // newKBucket returns a new kbucket pointer.
@@ -178,7 +178,6 @@ func newKBucket(prefix *bitmap) *kbucket {
 func (bucket *kbucket) LastChanged() time.Time {
 	bucket.RLock()
 	defer bucket.RUnlock()
-
 	return bucket.lastChanged
 }
 
@@ -425,6 +424,7 @@ func (rt *routingTable) Insert(nd *node) bool {
 
 // GetNeighbors returns the size-length nodes closest to id.
 func (rt *routingTable) GetNeighbors(id *bitmap, size int) []*node {
+	//
 	rt.RLock()
 	nodes := make([]interface{}, 0, rt.cachedNodes.Len())
 	for item := range rt.cachedNodes.Iter() {
@@ -432,23 +432,27 @@ func (rt *routingTable) GetNeighbors(id *bitmap, size int) []*node {
 	}
 	rt.RUnlock()
 
+	// 从 nodes 中查找距离 id 最近的 size 个节点。
 	neighbors := getTopK(nodes, id, size)
-	result := make([]*node, len(neighbors))
 
+	// 类型转换: []interface{} => []*node
+	result := make([]*node, len(neighbors))
 	for i, nd := range neighbors {
 		result[i] = nd.(*node)
 	}
+
+	// 返回
 	return result
 }
 
-// GetNeighborIds return the size-length compact node info closest to id.
+// GetNeighborCompactInfos return the size-length compact node info closest to id.
 func (rt *routingTable) GetNeighborCompactInfos(id *bitmap, size int) []string {
 
+	// 从 nodes 中查找距离 id 最近的 size 个节点。
+	neighbors := rt.GetNeighbors(id, size)
 
 	//
-	neighbors := rt.GetNeighbors(id, size)
 	infos := make([]string, len(neighbors))
-
 	for i, no := range neighbors {
 		infos[i] = no.CompactNodeInfo()
 	}
@@ -456,9 +460,9 @@ func (rt *routingTable) GetNeighborCompactInfos(id *bitmap, size int) []string {
 	return infos
 }
 
-// GetNodeKBucktByID returns node whose id is `id` and the bucket it
+// GetNodeKBucketByID returns node whose id is `id` and the bucket it
 // belongs to.
-func (rt *routingTable) GetNodeKBucktByID(id *bitmap) (nd *node, bucket *kbucket) {
+func (rt *routingTable) GetNodeKBucketByID(id *bitmap) (nd *node, bucket *kbucket) {
 
 	rt.RLock()
 	defer rt.RUnlock()
@@ -503,14 +507,14 @@ func (rt *routingTable) GetNodeByAddress(address string) (no *node, ok bool) {
 
 // Remove deletes the node whose id is `id`.
 func (rt *routingTable) Remove(id *bitmap) {
-	if nd, bucket := rt.GetNodeKBucktByID(id); nd != nil {
+	if nd, bucket := rt.GetNodeKBucketByID(id); nd != nil {
 		bucket.Replace(nd)
 		rt.cachedNodes.Delete(nd.addr.String())
 		rt.cachedKBuckets.Push(bucket.prefix.String(), bucket)
 	}
 }
 
-// Remove deletes the node whose address is `ip:port`.
+// RemoveByAddr deletes the node whose address is `ip:port`.
 func (rt *routingTable) RemoveByAddr(address string) {
 	v, ok := rt.cachedNodes.Get(address)
 	if ok {
@@ -591,15 +595,25 @@ func (kHeap *topKHeap) Pop() interface{} {
 // getTopK solves the top-k problem with heap. It's time complexity is
 // O(n*log(k)). When n is large, time complexity will be too high, need to be
 // optimized.
+//
+// 从 queue 中查找距离 id 最近的 k 个元素。
+//
 func getTopK(queue []interface{}, id *bitmap, k int) []interface{} {
 
 	topkHeap := make(topKHeap, 0, k+1)
 
+	// 遍历 queue ，构造 topKHeap
 	for _, value := range queue {
 		node := value.(*node)
+
+		// 计算 id 和 node.Id 的 XOR 距离
 		distance := id.Xor(node.id)
+
+		// 如果 Heap 已满，酌情替换
 		if topkHeap.Len() == k {
-			var last = topkHeap[topkHeap.Len() - 1]
+			// 取尾部元素 last
+			var last = topkHeap[topkHeap.Len()-1]
+			// 如果 last 比 node 的距离更远，就替换它
 			if last.distance.Compare(distance, maxPrefixLength) == 1 {
 				item := &heapItem{
 					distance,
@@ -608,6 +622,7 @@ func getTopK(queue []interface{}, id *bitmap, k int) []interface{} {
 				heap.Push(&topkHeap, item)
 				heap.Pop(&topkHeap)
 			}
+			// 如果 Heap 未满，直接添加
 		} else {
 			item := &heapItem{
 				distance,
@@ -617,6 +632,7 @@ func getTopK(queue []interface{}, id *bitmap, k int) []interface{} {
 		}
 	}
 
+	// 遍历 topKHeap ，按序输出 top k list
 	tops := make([]interface{}, topkHeap.Len())
 	for i := len(tops) - 1; i >= 0; i-- {
 		tops[i] = heap.Pop(&topkHeap).(*heapItem).value
