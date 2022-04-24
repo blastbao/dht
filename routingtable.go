@@ -131,20 +131,27 @@ func (pm *peersManager) Insert(infoHash string, peer *Peer) {
 
 // GetPeers returns size-length peers who announces having infoHash.
 func (pm *peersManager) GetPeers(infoHash string, size int) []*Peer {
+
 	peers := make([]*Peer, 0, size)
 
+
+	//
 	v, ok := pm.table.Get(infoHash)
 	if !ok {
 		return peers
 	}
 
+	//
 	for e := range v.(*keyedDeque).Iter() {
 		peers = append(peers, e.Value.(*Peer))
 	}
 
+
 	if len(peers) > size {
 		peers = peers[len(peers)-size:]
 	}
+
+
 	return peers
 }
 
@@ -436,6 +443,9 @@ func (rt *routingTable) GetNeighbors(id *bitmap, size int) []*node {
 
 // GetNeighborIds return the size-length compact node info closest to id.
 func (rt *routingTable) GetNeighborCompactInfos(id *bitmap, size int) []string {
+
+
+	//
 	neighbors := rt.GetNeighbors(id, size)
 	infos := make([]string, len(neighbors))
 
@@ -446,10 +456,9 @@ func (rt *routingTable) GetNeighborCompactInfos(id *bitmap, size int) []string {
 	return infos
 }
 
-// GetNodeKBucktById returns node whose id is `id` and the bucket it
+// GetNodeKBucktByID returns node whose id is `id` and the bucket it
 // belongs to.
-func (rt *routingTable) GetNodeKBucktByID(id *bitmap) (
-	nd *node, bucket *kbucket) {
+func (rt *routingTable) GetNodeKBucktByID(id *bitmap) (nd *node, bucket *kbucket) {
 
 	rt.RLock()
 	defer rt.RUnlock()
@@ -457,13 +466,21 @@ func (rt *routingTable) GetNodeKBucktByID(id *bitmap) (
 	var next *routingTableNode
 	root := rt.root
 
+	// 最多搜寻 160 个 bit
 	for prefixLen := 1; prefixLen <= maxPrefixLength; prefixLen++ {
+
+		// 取第 i 个 bit 值( 0 or 1 ) ，进而定位到是 root 的左子树，还是右子树。
 		next = root.Child(id.Bit(prefixLen - 1))
+
+		// 为空，则查找结束
 		if next == nil {
+
+			//
 			v, ok := root.KBucket().nodes.Get(id.RawString())
 			if !ok {
 				return
 			}
+
 			nd, bucket = v.Value.(*node), root.KBucket()
 			return
 		}
@@ -575,6 +592,7 @@ func (kHeap *topKHeap) Pop() interface{} {
 // O(n*log(k)). When n is large, time complexity will be too high, need to be
 // optimized.
 func getTopK(queue []interface{}, id *bitmap, k int) []interface{} {
+
 	topkHeap := make(topKHeap, 0, k+1)
 
 	for _, value := range queue {

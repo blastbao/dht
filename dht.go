@@ -116,16 +116,16 @@ func NewCrawlConfig() *Config {
 // DHT represents a DHT node.
 type DHT struct {
 	*Config
-	node               *node
-	conn               *net.UDPConn
-	routingTable       *routingTable
-	transactionManager *transactionManager
-	peersManager       *peersManager
-	tokenManager       *tokenManager
-	blackList          *blackList
-	Ready              bool
-	packets            chan packet
-	workerTokens       chan struct{}
+	node               *node				// 本机 Node
+	conn               *net.UDPConn			// 本地 Udp Socket
+	routingTable       *routingTable		// 路由表
+	transactionManager *transactionManager	// 查询(事务)管理器
+	peersManager       *peersManager		//
+	tokenManager       *tokenManager		//
+	blackList          *blackList			//
+	Ready              bool					//
+	packets            chan packet			// 接收 UDP Packet
+	workerTokens       chan struct{}		//
 }
 
 // New returns a DHT pointer. If config is nil, then config will be set to
@@ -207,9 +207,9 @@ func (dht *DHT) init() {
 	)
 
 	// 启动各个管理器
-	go dht.transactionManager.run()
-	go dht.tokenManager.clear()
-	go dht.blackList.clear()
+	go dht.transactionManager.run()	// 异步执行 Query 请求
+	go dht.tokenManager.clear() 	// 每隔 3 min 移除 Token 表中的过期条目
+	go dht.blackList.clear() 		// 每隔 10 min 移除黑名单中的过期条目
 }
 
 // join makes current node join the dht network.
@@ -222,12 +222,13 @@ func (dht *DHT) join() {
 			continue
 		}
 		// NOTE: Temporary node has NOT node id.
-		// 查找对应节点
+		//
+		// 通过执行 findNode 到 prime nodes ，让它们感知到本节点上线。
 		dht.transactionManager.findNode(
-			&node{
+			&node{						// 目标 Node
 				addr: raddr,
 			},
-			dht.node.id.RawString(),
+			dht.node.id.RawString(), 	// 本机 NodeID
 		)
 	}
 }
@@ -237,25 +238,37 @@ func (dht *DHT) listen() {
 	go func() {
 		buff := make([]byte, 8192)
 		for {
+			// 从 Udp Socket 中读取 Packet
 			n, raddr, err := dht.conn.ReadFromUDP(buff)
 			if err != nil {
 				continue
 			}
-			dht.packets <- packet{buff[:n], raddr}
+			// 将 Udp Packet 写入到管道中
+			dht.packets <- packet{
+				buff[:n],	// 数据
+				raddr,	// 地址
+			}
 		}
 	}()
 }
 
 // id returns a id near to target if target is not null, otherwise it returns
 // the dht's node id.
+//
+//
 func (dht *DHT) id(target string) string {
+	// 返回本机 NodeId
 	if dht.IsStandardMode() || target == "" {
 		return dht.node.id.RawString()
 	}
+
+	//
 	return target[:15] + dht.node.id.RawString()[15:]
 }
 
 // GetPeers returns peers who have announced having infoHash.
+//
+// 根据 infoHash 查找 peers
 func (dht *DHT) GetPeers(infoHash string) error {
 	if !dht.Ready {
 		return ErrNotReady
@@ -266,6 +279,7 @@ func (dht *DHT) GetPeers(infoHash string) error {
 	}
 
 	if len(infoHash) == 40 {
+		// 将 16 进制字符串转换原始字节编码
 		data, err := hex.DecodeString(infoHash)
 		if err != nil {
 			return err
@@ -273,9 +287,13 @@ func (dht *DHT) GetPeers(infoHash string) error {
 		infoHash = string(data)
 	}
 
+	// 查找路由表，获取和 hashInfo 距离最近的 n 个 neighbors
 	neighbors := dht.routingTable.GetNeighbors(
-		newBitmapFromString(infoHash), dht.routingTable.Len())
+		newBitmapFromString(infoHash),
+		dht.routingTable.Len(),
+	)
 
+	// ???
 	for _, no := range neighbors {
 		dht.transactionManager.getPeers(no, infoHash)
 	}
@@ -296,8 +314,10 @@ func (dht *DHT) Run() {
 
 	for {
 		select {
+		// 接收并处理 Udp Packet
 		case pkt = <-dht.packets:
 			handle(dht, pkt)
+		// 定时更新路由表
 		case <-tick:
 			if dht.routingTable.Len() == 0 {
 				dht.join()

@@ -121,13 +121,14 @@ func (bitmap *bitmap) Compare(other *bitmap, prefixLen int) int {
 
 // Xor returns the xor value of two bitmap.
 func (bitmap *bitmap) Xor(other *bitmap) *bitmap {
+	// 位数必须相同，否则无法执行逻辑运算
 	if bitmap.Size != other.Size {
 		panic("size not the same")
 	}
-
+	// 执行 XOR ，并保存结果
 	distance := newBitmap(bitmap.Size)
 	xor(distance.data, bitmap.data, other.data)
-
+	// 返回 XOR 结果
 	return distance
 }
 

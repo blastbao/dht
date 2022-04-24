@@ -241,7 +241,7 @@ func (deque *keyedDeque) Get(key interface{}) (*list.Element, bool) {
 	return v, ok
 }
 
-// Has returns whether key already exists.
+// HasKey returns whether key already exists.
 func (deque *keyedDeque) HasKey(key interface{}) bool {
 	_, ok := deque.Get(key)
 	return ok
@@ -265,7 +265,7 @@ func (deque *keyedDeque) Delete(key interface{}) (v interface{}) {
 	return
 }
 
-// Removes overwrites list.List.Remove.
+// Remove overwrites list.List.Remove.
 func (deque *keyedDeque) Remove(e *list.Element) (v interface{}) {
 	deque.RLock()
 	key, ok := deque.invertedIndex[e]

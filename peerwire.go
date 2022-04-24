@@ -345,7 +345,7 @@ func (wire *Wire) fetchMetadata(r Request) {
 			pieceLen := length - 2 - index
 
 			if (piece != piecesNum-1 && pieceLen != BLOCK) ||
-				(piece == piecesNum-1 && pieceLen != metadataSize%BLOCK) {
+			   (piece == piecesNum-1 && pieceLen != metadataSize%BLOCK) {
 				return
 			}
 
@@ -373,6 +373,8 @@ func (wire *Wire) fetchMetadata(r Request) {
 
 // Run starts the peer wire protocol.
 func (wire *Wire) Run() {
+
+	// 每隔 10 min 移除黑名单中的过期条目
 	go wire.blackList.clear()
 
 	for r := range wire.requests {

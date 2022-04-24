@@ -23,6 +23,8 @@ const (
 )
 
 // packet represents the information receive from udp.
+//
+// 代表从 Udp Socket 上接收的 Packet
 type packet struct {
 	data  []byte
 	raddr *net.UDPAddr
@@ -53,32 +55,34 @@ func newTokenManager(expiredAfter time.Duration, dht *DHT) *tokenManager {
 // token returns a token. If it doesn't exist or is expired, it will add a
 // new token.
 func (tm *tokenManager) token(addr *net.UDPAddr) string {
+	// 根据 IP 地址查询 Token
 	v, ok := tm.Get(addr.IP.String())
 	tk, _ := v.(token)
 
+	// 如果 Token 不存在或者已过期，就新建 Token 并更新
 	if !ok || time.Now().Sub(tk.createTime) > tm.expiredAfter {
 		tk = token{
 			data:       randomString(5),
 			createTime: time.Now(),
 		}
-
 		tm.Set(addr.IP.String(), tk)
 	}
 
+	// 返回 Token
 	return tk.data
 }
 
 // clear removes expired tokens.
+//
+// 每隔 3 min 移除 Token 表中的过期条目
 func (tm *tokenManager) clear() {
 	for _ = range time.Tick(time.Minute * 3) {
 		keys := make([]interface{}, 0, 100)
-
 		for item := range tm.Iter() {
 			if time.Now().Sub(item.val.(token).createTime) > tm.expiredAfter {
 				keys = append(keys, item.key)
 			}
 		}
-
 		tm.DeleteMulti(keys)
 	}
 }
@@ -101,7 +105,7 @@ func (tm *tokenManager) check(addr *net.UDPAddr, tokenString string) bool {
 // 构造查询请求
 func makeQuery(t, q string, a map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
-		"t": t,		// transactionID
+		"t": t,		// transId
 		"y": "q",	// query
 		"q": q,		// query type
 		"a": a,		// params
@@ -161,8 +165,8 @@ type transaction struct {
 // transactionManager represents the manager of transactions.
 type transactionManager struct {
 	*sync.RWMutex
-	transactions *syncedMap
-	index        *syncedMap
+	transactions *syncedMap		// <tranId, trans>
+	index        *syncedMap		// <queryType:address, trans>
 	cursor       uint64
 	maxCursor    uint64
 	queryChan    chan *query
@@ -202,11 +206,13 @@ func (tm *transactionManager) newTransaction(id string, q *query) *transaction {
 // genIndexKey generates an indexed key which consists of queryType and
 // address.
 func (tm *transactionManager) genIndexKey(queryType, address string) string {
+	// queryType:address
 	return strings.Join([]string{queryType, address}, ":")
 }
 
 // genIndexKeyByTrans generates an indexed key by a transaction.
 func (tm *transactionManager) genIndexKeyByTrans(trans *transaction) string {
+	// queryType:address
 	return tm.genIndexKey(trans.data["q"].(string), trans.node.addr.String())
 }
 
@@ -215,12 +221,16 @@ func (tm *transactionManager) insert(trans *transaction) {
 	tm.Lock()
 	defer tm.Unlock()
 
+	// 保存 <tranId, trans> 到 map 中
 	tm.transactions.Set(trans.id, trans)
+	// 保存 <queryType:address, trans> 到 map 中
 	tm.index.Set(tm.genIndexKeyByTrans(trans), trans)
 }
 
 // delete removes a transaction from transactionManager.
 func (tm *transactionManager) delete(transID string) {
+
+	// 根据 transId 获取 trans
 	v, ok := tm.transactions.Get(transID)
 	if !ok {
 		return
@@ -230,7 +240,10 @@ func (tm *transactionManager) delete(transID string) {
 	defer tm.Unlock()
 
 	trans := v.(*transaction)
+
+	// 移除 <transId, trans>
 	tm.transactions.Delete(trans.id)
+	// 移除 <queryType:address, trans>
 	tm.index.Delete(tm.genIndexKeyByTrans(trans))
 }
 
@@ -239,12 +252,12 @@ func (tm *transactionManager) len() int {
 	return tm.transactions.Len()
 }
 
-// transaction returns a transaction. keyType should be one of 0, 1 which
-// represents transId and index each.
-func (tm *transactionManager) transaction(
-	key string, keyType int) *transaction {
+// transaction returns a transaction.
+// keyType should be one of 0, 1 which represents transId and index each.
+func (tm *transactionManager) transaction(key string, keyType int) *transaction {
 
 	sm := tm.transactions
+
 	if keyType == 1 {
 		sm = tm.index
 	}
@@ -283,10 +296,14 @@ func (tm *transactionManager) filterOne(
 // query sends the query-formed data to udp and wait for the response.
 // When timeout, it will retry `try - 1` times, which means it will query
 // `try` times totally.
+//
 func (tm *transactionManager) query(q *query, try int) {
+	// transId
 	transID := q.data["t"].(string)
+	// trans
 	trans := tm.newTransaction(transID, q)
 
+	//
 	tm.insert(trans)
 	defer tm.delete(trans.id)
 
@@ -313,50 +330,59 @@ func (tm *transactionManager) query(q *query, try int) {
 // run starts to listen and consume the query chan.
 func (tm *transactionManager) run() {
 	var q *query
-
 	for {
 		select {
 		case q = <-tm.queryChan:
+			// 异步执行 Query 请求
 			go tm.query(q, tm.dht.Try)
 		}
 	}
 }
 
 // sendQuery send query-formed data to the chan.
-func (tm *transactionManager) sendQuery(
-	no *node, queryType string, a map[string]interface{}) {
-
+func (tm *transactionManager) sendQuery(no *node, queryType string, a map[string]interface{}) {
 	// If the target is self, then stop.
+	//
+	// Cond1. 目标节点为本节点
 	if no.id != nil && no.id.RawString() == tm.dht.node.id.RawString() ||
+		// Cond2. 如果 queryType:address 的查询请求非空
 		tm.getByIndex(tm.genIndexKey(queryType, no.addr.String())) != nil ||
+		// Cond3. 如果目标 Node 的 IP/Port 在黑名单中
 		tm.dht.blackList.in(no.addr.IP.String(), no.addr.Port) {
+		// 直接返回
 		return
 	}
 
+	// 构造查询请求
 	data := makeQuery(tm.genTransID(), queryType, a)
+
+	// 发送请求
 	tm.queryChan <- &query{
-		node: no,
-		data: data,
+		node: no,	// 目标节点
+		data: data,	// 请求体
 	}
 }
 
 // ping sends ping query to the chan.
 func (tm *transactionManager) ping(no *node) {
+	// 发送 ping 类型消息到 no 节点
 	tm.sendQuery(no, pingType, map[string]interface{}{
-		"id": tm.dht.id(no.id.RawString()),
+		"id": tm.dht.id(no.id.RawString()), // ??? 本机 NodeID ???
 	})
 }
 
 // findNode sends find_node query to the chan.
 func (tm *transactionManager) findNode(no *node, target string) {
+	// 发送 findNode 类型消息到 no 节点
 	tm.sendQuery(no, findNodeType, map[string]interface{}{
-		"id":     tm.dht.id(target),
-		"target": target,
+		"id":     tm.dht.id(target),	// ??? 本机 NodeID ???
+		"target": target,				// 查找的目标节点 NodeId
 	})
 }
 
 // getPeers sends get_peers query to the chan.
 func (tm *transactionManager) getPeers(no *node, infoHash string) {
+	// 发送 getPeers 到 no 节点
 	tm.sendQuery(no, getPeersType, map[string]interface{}{
 		"id":        tm.dht.id(infoHash),
 		"info_hash": infoHash,
@@ -506,11 +532,13 @@ func handleRequest(dht *DHT, addr *net.UDPAddr, response map[string]interface{})
 				return
 			}
 
-			// 计算
-			var nodes string
+			// 计算 target 对应的 Bitmap ，用于计算 XOR
 			targetID := newBitmapFromString(target)
 
+			//
 			no, _ := dht.routingTable.GetNodeKBucktByID(targetID)
+
+			var nodes string
 			if no != nil {
 				nodes = no.CompactNodeInfo()
 			} else {
@@ -520,32 +548,35 @@ func handleRequest(dht *DHT, addr *net.UDPAddr, response map[string]interface{})
 				)
 			}
 
+			//
 			send(dht, addr, makeResponse(t, map[string]interface{}{
 				"id":    dht.id(target),
 				"nodes": nodes,
 			}))
+
 		}
 	case getPeersType:
+
+		// 参数检查
 		if err := ParseKey(a, "info_hash", "string"); err != nil {
 			send(dht, addr, makeError(t, protocolError, err.Error()))
 			return
 		}
-
 		infoHash := a["info_hash"].(string)
-
 		if len(infoHash) != 20 {
 			send(dht, addr, makeError(t, protocolError, "invalid info_hash"))
 			return
 		}
 
+		// 爬虫模式
 		if dht.IsCrawlMode() {
 			send(dht, addr, makeResponse(t, map[string]interface{}{
 				"id":    dht.id(infoHash),
 				"token": dht.tokenManager.token(addr),
 				"nodes": "",
 			}))
-		} else if peers := dht.peersManager.GetPeers(
-			infoHash, dht.K); len(peers) > 0 {
+
+		} else if peers := dht.peersManager.GetPeers(infoHash, dht.K); len(peers) > 0 {
 
 			values := make([]interface{}, len(peers))
 			for i, p := range peers {
@@ -558,17 +589,20 @@ func handleRequest(dht *DHT, addr *net.UDPAddr, response map[string]interface{})
 				"token":  dht.tokenManager.token(addr),
 			}))
 		} else {
+
+			neighbors := dht.routingTable.GetNeighborCompactInfos(newBitmapFromString(infoHash), dht.K)
 			send(dht, addr, makeResponse(t, map[string]interface{}{
 				"id":    dht.id(infoHash),
 				"token": dht.tokenManager.token(addr),
-				"nodes": strings.Join(dht.routingTable.GetNeighborCompactInfos(
-					newBitmapFromString(infoHash), dht.K), ""),
+				"nodes": strings.Join(neighbors, ""),
 			}))
 		}
 
+		// 事件回调函数
 		if dht.OnGetPeers != nil {
 			dht.OnGetPeers(infoHash, addr.IP.String(), addr.Port)
 		}
+
 	case announcePeerType:
 		if err := ParseKeys(a, [][]string{
 			{"info_hash", "string"},
@@ -618,8 +652,7 @@ func handleRequest(dht *DHT, addr *net.UDPAddr, response map[string]interface{})
 // findOn puts nodes in the response to the routingTable, then if target is in
 // the nodes or all nodes are in the routingTable, it stops. Otherwise it
 // continues to findNode or getPeers.
-func findOn(dht *DHT, r map[string]interface{}, target *bitmap,
-	queryType string) error {
+func findOn(dht *DHT, r map[string]interface{}, target *bitmap, queryType string) error {
 
 	if err := ParseKey(r, "nodes", "string"); err != nil {
 		return err
@@ -778,6 +811,8 @@ var handlers = map[string]func(*DHT, *net.UDPAddr, map[string]interface{}) bool{
 }
 
 // handle handles packets received from udp.
+//
+// 处理 Udp Packet
 func handle(dht *DHT, pkt packet) {
 	if len(dht.workerTokens) == dht.PacketWorkerLimit {
 		return
