@@ -113,6 +113,8 @@ func onHandshake(data []byte) (err error) {
 }
 
 // sendExtHandshake requests for the ut_metadata and metadata_size.
+//
+// 发送扩展消息
 func sendExtHandshake(conn *net.TCPConn) error {
 	data := append(
 		[]byte{ EXTENDED, HANDSHAKE },
@@ -120,14 +122,13 @@ func sendExtHandshake(conn *net.TCPConn) error {
 			"m": map[string]interface{}{"ut_metadata": 1},
 		})...,
 	)
-
 	return sendMessage(conn, data)
 }
 
 // getUTMetaSize returns the ut_metadata and metadata_size.
-func getUTMetaSize(data []byte) (
-	utMetadata int, metadataSize int, err error) {
+func getUTMetaSize(data []byte) (utMetadata int, metadataSize int, err error) {
 
+	// BT 协议解析
 	v, err := Decode(data)
 	if err != nil {
 		return
@@ -139,6 +140,7 @@ func getUTMetaSize(data []byte) (
 		return
 	}
 
+	// 参数校验
 	if err = ParseKeys(
 		dict, [][]string{{"metadata_size", "int"}, {"m", "map"}}); err != nil {
 		return
@@ -155,6 +157,7 @@ func getUTMetaSize(data []byte) (
 	if metadataSize > MaxMetadataSize {
 		err = errors.New("metadata_size too long")
 	}
+
 	return
 }
 
@@ -251,9 +254,11 @@ func (wire *Wire) fetchMetadata(r Request) {
 		recover()
 	}()
 
+	// parameters
 	infoHash := r.InfoHash
 	address := genAddress(r.IP, r.Port)
 
+	// tcp connection
 	dial, err := net.DialTimeout("tcp", address, time.Second*15)
 	if err != nil {
 		wire.blackList.insert(r.IP, r.Port)
@@ -263,31 +268,39 @@ func (wire *Wire) fetchMetadata(r Request) {
 	conn.SetLinger(0)
 	defer conn.Close()
 
+	// 数据缓存
 	data := bytes.NewBuffer(nil)
 	data.Grow(BLOCK)
 
+	// 发送握手包
 	if sendHandshake(conn, infoHash, []byte(randomString(20))) != nil ||
+		// 读取响应包
 		read(conn, 68, data) != nil ||
+		// 执行握手
 		onHandshake(data.Next(68)) != nil ||
+		// 发送扩展包
 		sendExtHandshake(conn) != nil {
 		return
 	}
 
 	for {
+		// 读取数据
 		length, err = readMessage(conn, data)
 		if err != nil {
 			return
 		}
-
+		// 空数据
 		if length == 0 {
 			continue
 		}
 
+		// 读取 1B 的 msgType
 		msgType, err = data.ReadByte()
 		if err != nil {
 			return
 		}
 
+		//
 		switch msgType {
 		case EXTENDED:
 			extendedID, err := data.ReadByte()
@@ -378,22 +391,26 @@ func (wire *Wire) Run() {
 	go wire.blackList.clear()
 
 	for r := range wire.requests {
+		// 并发控制
 		wire.workerTokens <- struct{}{}
-
 		go func(r Request) {
 			defer func() {
+				// 并发控制
 				<-wire.workerTokens
 			}()
 
+			// key = infoHash:ip:port
 			key := strings.Join([]string{
 				string(r.InfoHash), genAddress(r.IP, r.Port),
 			}, ":")
 
-			if len(r.InfoHash) != 20 || wire.blackList.in(r.IP, r.Port) ||
-				wire.queue.Has(key) {
+			// 参数非法 || IP:Port 非法 || 请求重复
+			if len(r.InfoHash) != 20 || wire.blackList.in(r.IP, r.Port) || wire.queue.Has(key) {
+				// 拒绝
 				return
 			}
 
+			// 拉取元数据
 			wire.fetchMetadata(r)
 		}(r)
 	}

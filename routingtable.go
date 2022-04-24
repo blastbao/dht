@@ -52,6 +52,7 @@ func newNodeFromCompactInfo(
 // CompactIPPortInfo returns "Compact IP-address/port info".
 // See http://www.bittorrent.org/beps/bep_0005.html.
 func (node *node) CompactIPPortInfo() string {
+	// <IP:Port>
 	info, _ := encodeCompactIPPortInfo(node.addr.IP, node.addr.Port)
 	return info
 }
@@ -59,9 +60,8 @@ func (node *node) CompactIPPortInfo() string {
 // CompactNodeInfo returns "Compact node info".
 // See http://www.bittorrent.org/beps/bep_0005.html.
 func (node *node) CompactNodeInfo() string {
-	return strings.Join([]string{
-		node.id.RawString(), node.CompactIPPortInfo(),
-	}, "")
+	// <NodeID><IP:Port>
+	return strings.Join([]string{node.id.RawString(), node.CompactIPPortInfo()}, "")
 }
 
 // Peer represents a peer contact.
@@ -82,11 +82,12 @@ func newPeer(ip net.IP, port int, token string) *Peer {
 
 // newPeerFromCompactIPPortInfo create a peer pointer by compact ip/port info.
 func newPeerFromCompactIPPortInfo(compactInfo, token string) (*Peer, error) {
+	// 解析 IP:Port
 	ip, port, err := decodeCompactIPPortInfo(compactInfo)
 	if err != nil {
 		return nil, err
 	}
-
+	// 构造 Peer
 	return newPeer(ip, port, token), nil
 }
 
@@ -157,8 +158,8 @@ func (pm *peersManager) GetPeers(infoHash string, size int) []*Peer {
 // k-桶
 type kbucket struct {
 	sync.RWMutex
-	nodes       *keyedDeque	//
-	candidates  *keyedDeque //
+	nodes       *keyedDeque	// 节点
+	candidates  *keyedDeque // 候选节点
 	lastChanged time.Time   // 最后更新时间
 	prefix      *bitmap     // 前缀
 }
@@ -184,7 +185,6 @@ func (bucket *kbucket) LastChanged() time.Time {
 // RandomChildID returns a random id that has the same prefix with bucket.
 func (bucket *kbucket) RandomChildID() string {
 	prefixLen := bucket.prefix.Size / 8
-
 	return strings.Join([]string{
 		bucket.prefix.RawString()[:prefixLen],
 		randomString(20 - prefixLen),
@@ -250,8 +250,8 @@ func (bucket *kbucket) Fresh(dht *DHT) {
 // routingTableNode represents routing table tree node.
 type routingTableNode struct {
 	sync.RWMutex
-	children []*routingTableNode
-	bucket   *kbucket
+	children []*routingTableNode	// 子节点列表，因为是二叉树，最多有 2 个子节点
+	bucket   *kbucket				// k-桶
 }
 
 // newRoutingTableNode returns a new routingTableNode pointer.
@@ -264,22 +264,22 @@ func newRoutingTableNode(prefix *bitmap) *routingTableNode {
 
 // Child returns routingTableNode's left or right child.
 func (tableNode *routingTableNode) Child(index int) *routingTableNode {
+	// 参数检查，二叉树只有 2 个子节点
 	if index >= 2 {
 		return nil
 	}
-
+	// 获取第 index 子节点
 	tableNode.RLock()
 	defer tableNode.RUnlock()
-
 	return tableNode.children[index]
 }
 
 // SetChild sets routingTableNode's left or right child. When index is 0, it's
 // the left child, if 1, it's the right child.
 func (tableNode *routingTableNode) SetChild(index int, c *routingTableNode) {
+	// 设置第 index 子节点
 	tableNode.Lock()
 	defer tableNode.Unlock()
-
 	tableNode.children[index] = c
 }
 
@@ -287,7 +287,6 @@ func (tableNode *routingTableNode) SetChild(index int, c *routingTableNode) {
 func (tableNode *routingTableNode) KBucket() *kbucket {
 	tableNode.RLock()
 	defer tableNode.RUnlock()
-
 	return tableNode.bucket
 }
 
@@ -295,21 +294,28 @@ func (tableNode *routingTableNode) KBucket() *kbucket {
 func (tableNode *routingTableNode) SetKBucket(bucket *kbucket) {
 	tableNode.Lock()
 	defer tableNode.Unlock()
-
 	tableNode.bucket = bucket
 }
 
 // Split splits current routingTableNode and sets it's two children.
 func (tableNode *routingTableNode) Split() {
+
+	// 位于 kad 数的第几层
 	prefixLen := tableNode.KBucket().prefix.Size
 
+	// 如果是最底层，就不要再分裂了
 	if prefixLen == maxPrefixLength {
 		return
 	}
 
+	// 分裂为左右两个子节点
 	for i := 0; i < 2; i++ {
-		tableNode.SetChild(i, newRoutingTableNode(newBitmapFrom(
-			tableNode.KBucket().prefix, prefixLen+1)))
+		// 创建一个有 prefixLen+1 个 bits 的位图，并将前 prefixLen 个 bit 拷贝过来。
+		bmap := newBitmapFrom(tableNode.KBucket().prefix, prefixLen+1)
+		//
+		rtnode := newRoutingTableNode(bmap)
+		//
+		tableNode.SetChild(i, rtnode)
 	}
 
 	tableNode.Lock()
@@ -332,6 +338,8 @@ func (tableNode *routingTableNode) Split() {
 }
 
 // routingTable implements the routing table in DHT protocol.
+//
+// 路由表
 type routingTable struct {
 	*sync.RWMutex
 	k              int
@@ -366,6 +374,7 @@ func (rt *routingTable) Insert(nd *node) bool {
 	rt.Lock()
 	defer rt.Unlock()
 
+	// 如果是黑名单节点、或者已缓存节点数达到上限，就拒绝插入
 	if rt.dht.blackList.in(nd.addr.IP.String(), nd.addr.Port) ||
 		rt.cachedNodes.Len() >= rt.dht.MaxNodes {
 		return false
@@ -375,24 +384,31 @@ func (rt *routingTable) Insert(nd *node) bool {
 		next   *routingTableNode
 		bucket *kbucket
 	)
-	root := rt.root
 
+	// 从顶往下，深搜二叉树。
+	//
+	// 整个二叉树的深度最大为 160 ，所以最多循环 160 次，每次循环向下定位到一棵子树。
+	//
+	root := rt.root
 	for prefixLen := 1; prefixLen <= maxPrefixLength; prefixLen++ {
+		// [定位子树] 取 NodeId 第 i 个 bit 值( 0 or 1 ) ，定位到是 root 的左子树，还是右子树。
 		next = root.Child(nd.id.Bit(prefixLen - 1))
 
+		// 子树非空，继续向下搜索。
 		if next != nil {
 			// If next is not the leaf.
 			root = next
-		} else if root.KBucket().nodes.Len() < rt.k ||
-			root.KBucket().nodes.HasKey(nd.id.RawString()) {
+		// 子树为空，但是当前树的k-桶未满或者 NodeId 已经存在于 k-桶中，则直接插入。
+		} else if root.KBucket().nodes.Len() < rt.k || root.KBucket().nodes.HasKey(nd.id.RawString()) {
 
 			bucket = root.KBucket()
 			isNew := bucket.Insert(nd)
 
 			rt.cachedNodes.Set(nd.addr.String(), nd)
 			rt.cachedKBuckets.Push(bucket.prefix.String(), bucket)
-
 			return isNew
+
+		// 子树为空，但是当前树的k-桶已满且 NodeId 不存在于 k-桶中，且
 		} else if root.KBucket().prefix.Compare(nd.id, prefixLen-1) == 0 {
 			// If node has the same prefix with bucket, split it.
 
@@ -408,6 +424,8 @@ func (rt *routingTable) Insert(nd *node) bool {
 
 			root = root.Child(nd.id.Bit(prefixLen - 1))
 		} else {
+
+
 			// Finally, store node as a candidate and fresh the bucket.
 			root.KBucket().candidates.PushBack(nd)
 			if root.KBucket().candidates.Len() > rt.k {
@@ -418,6 +436,7 @@ func (rt *routingTable) Insert(nd *node) bool {
 			go root.KBucket().Fresh(rt.dht)
 			return false
 		}
+
 	}
 	return false
 }
@@ -451,9 +470,10 @@ func (rt *routingTable) GetNeighborCompactInfos(id *bitmap, size int) []string {
 	// 从 nodes 中查找距离 id 最近的 size 个节点。
 	neighbors := rt.GetNeighbors(id, size)
 
-	//
+	// 格式转换: nodes => list[<NodeID><IP:Port>]
 	infos := make([]string, len(neighbors))
 	for i, no := range neighbors {
+		// info = <NodeID><IP:Port>
 		infos[i] = no.CompactNodeInfo()
 	}
 
@@ -563,7 +583,7 @@ func (rt *routingTable) Len() int {
 
 // Implementation of heap with heap.Interface.
 type heapItem struct {
-	distance *bitmap
+	distance *bitmap		// XOR 距离
 	value    interface{}
 }
 

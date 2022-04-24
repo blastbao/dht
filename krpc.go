@@ -575,22 +575,22 @@ func handleRequest(dht *DHT, addr *net.UDPAddr, response map[string]interface{})
 				"token": dht.tokenManager.token(addr),
 				"nodes": "",
 			}))
-
 		} else if peers := dht.peersManager.GetPeers(infoHash, dht.K); len(peers) > 0 {
-
+			// 把 peers 转换成 list[<ip:port>]
 			values := make([]interface{}, len(peers))
 			for i, p := range peers {
 				values[i] = p.CompactIPPortInfo()
 			}
-
+			// 返回
 			send(dht, addr, makeResponse(t, map[string]interface{}{
 				"id":     dht.id(infoHash),
 				"values": values,
 				"token":  dht.tokenManager.token(addr),
 			}))
 		} else {
-
+			// 查找距离 infoHash 最近的 k 个节点。
 			neighbors := dht.routingTable.GetNeighborCompactInfos(newBitmapFromString(infoHash), dht.K)
+			// 返回
 			send(dht, addr, makeResponse(t, map[string]interface{}{
 				"id":    dht.id(infoHash),
 				"token": dht.tokenManager.token(addr),

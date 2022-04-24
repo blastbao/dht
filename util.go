@@ -12,6 +12,8 @@ import (
 )
 
 // randomString generates a size-length string randomly.
+//
+// 生成随机字符串
 func randomString(size int) string {
 	buff := make([]byte, size)
 	rand.Read(buff)
@@ -56,8 +58,8 @@ func decodeCompactIPPortInfo(info string) (ip net.IP, port int, err error) {
 		err = errors.New("compact info should be 6-length long")
 		return
 	}
-
 	ip = net.IPv4(info[0], info[1], info[2], info[3])
+	// port 是 2B 整数，65536
 	port = int((uint16(info[4]) << 8) | uint16(info[5]))
 	return
 }
@@ -65,17 +67,20 @@ func decodeCompactIPPortInfo(info string) (ip net.IP, port int, err error) {
 // encodeCompactIPPortInfo encodes an ip and a port number to
 // compactIP-address/port info.
 func encodeCompactIPPortInfo(ip net.IP, port int) (info string, err error) {
+	// 参数检查
 	if port > 65535 || port < 0 {
 		err = errors.New("port should be no greater than 65535 and no less than 0")
 		return
 	}
 
+	// 将 port 转换成 2 个 bytes ，如果 port 值比较小，高位 Byte 为 0 。
 	p := int2bytes(uint64(port))
 	if len(p) < 2 {
 		p = append(p, p[0])
 		p[0] = 0
 	}
 
+	// 拼接 ip 和 port(2B) ，并转换成 string
 	info = string(append(ip, p...))
 	return
 }
@@ -119,7 +124,6 @@ func getRemoteIP() (ip string, err error) {
 	if err != nil {
 		return
 	}
-
 	defer res.Body.Close()
 
 	data, err := ioutil.ReadAll(res.Body)
@@ -127,7 +131,6 @@ func getRemoteIP() (ip string, err error) {
 		return
 	}
 	ip = string(data)
-
 	return
 }
 

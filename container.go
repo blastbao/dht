@@ -145,9 +145,7 @@ func (slist *syncedList) PushBack(v interface{}) *list.Element {
 }
 
 // InsertBefore inserts v before mark.
-func (slist *syncedList) InsertBefore(
-	v interface{}, mark *list.Element) *list.Element {
-
+func (slist *syncedList) InsertBefore(v interface{}, mark *list.Element) *list.Element {
 	slist.Lock()
 	defer slist.Unlock()
 
@@ -155,8 +153,7 @@ func (slist *syncedList) InsertBefore(
 }
 
 // InsertAfter inserts v after mark.
-func (slist *syncedList) InsertAfter(
-	v interface{}, mark *list.Element) *list.Element {
+func (slist *syncedList) InsertAfter(v interface{}, mark *list.Element) *list.Element {
 
 	slist.Lock()
 	defer slist.Unlock()
@@ -205,9 +202,9 @@ func (slist *syncedList) Iter() <-chan *list.Element {
 // KeyedDeque represents a keyed deque.
 type keyedDeque struct {
 	*sync.RWMutex
-	*syncedList
-	index         map[interface{}]*list.Element
-	invertedIndex map[*list.Element]interface{}
+	*syncedList										// 数据链表，不排序
+	index         map[interface{}]*list.Element		// 正排索引: key => *elem
+	invertedIndex map[*list.Element]interface{}		// 倒排索引: *elem => key
 }
 
 // newKeyedDeque returns a newKeyedDeque pointer.
@@ -221,14 +218,18 @@ func newKeyedDeque() *keyedDeque {
 }
 
 // Push pushs a keyed-value to the end of deque.
+//
+// 插入 key-val
 func (deque *keyedDeque) Push(key interface{}, val interface{}) {
 	deque.Lock()
 	defer deque.Unlock()
-
+	// [正排索引] 已存在，则移除
 	if e, ok := deque.index[key]; ok {
 		deque.syncedList.Remove(e)
 	}
+	// [正排索引] 覆盖更新
 	deque.index[key] = deque.syncedList.PushBack(val)
+	// [倒排索引] 更新
 	deque.invertedIndex[deque.index[key]] = key
 }
 
@@ -236,13 +237,14 @@ func (deque *keyedDeque) Push(key interface{}, val interface{}) {
 func (deque *keyedDeque) Get(key interface{}) (*list.Element, bool) {
 	deque.RLock()
 	defer deque.RUnlock()
-
+	// [正排索引] 查找
 	v, ok := deque.index[key]
 	return v, ok
 }
 
 // HasKey returns whether key already exists.
 func (deque *keyedDeque) HasKey(key interface{}) bool {
+	// [正排索引] 查找
 	_, ok := deque.Get(key)
 	return ok
 }

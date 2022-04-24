@@ -8,30 +8,56 @@ import (
 
 // bitmap represents a bit array.
 type bitmap struct {
-	Size int
-	data []byte
+	Size int		// bit 数目
+	data []byte		//
 }
 
 // newBitmap returns a size-length bitmap pointer.
+//
+// size 是 bit 的数目，因为底层存储是 byte ，而每个 byte 存储 8 个 bit ，所以需要把 size 对 8 做一下 round up 。
+//
+// 假设 size == 13 ，需要存储 13 个 bits ，13 > 8 = 1 ，13 % 8 = 5 ，所以需要两个 byte 来存储。
+//
+// 存储是从低到高:
+//   [x,x,x,0,0,0,0,0][0,0,0,0,0,0,0,0]
 func newBitmap(size int) *bitmap {
+	// `size>>3` is equal to `size/8`
+	// `size&0x07` is equal to `size % 8`
+	//
+	// so, the result will be rounded up to to the nearest 8 bits.
+	//
 	div, mod := size>>3, size&0x07
+
+	// 如果 size 是 8 的 n 次倍，且还有余数，那么就多算一个 byte
 	if mod > 0 {
 		div++
 	}
+
+	// 存储原始 size 和底层 bytes 数组
 	return &bitmap{size, make([]byte, div)}
 }
 
 // newBitmapFrom returns a new copyed bitmap pointer which
 // newBitmap.data = other.data[:size].
+//
+//
+//
 func newBitmapFrom(other *bitmap, size int) *bitmap {
+	// 构造一个能容纳 size 个 bits 的位图
 	bitmap := newBitmap(size)
 
+	// 位数对齐
 	if size > other.Size {
 		size = other.Size
 	}
 
-	div := size >> 3
+	// 假设 size == 13 ，需要存储 13 个 bits ，13 > 8 = 1 ，13 % 8 = 5 ，所以需要两个 byte 来存储。
+	// 存储是从低到高:
+	//  [x,x,x,0,0,0,0,0][0,0,0,0,0,0,0,0]
 
+
+	// 所以，拷贝 bitmap 需要先拷贝低位的完整 bytes ，再拷贝高位的不完整 byte
+	div := size >> 3
 	for i := 0; i < div; i++ {
 		bitmap.data[i] = other.data[i]
 	}
@@ -63,6 +89,7 @@ func (bitmap *bitmap) Bit(index int) int {
 		panic("index out of range")
 	}
 
+	// 先定位到是第几个 byte ，再定位是第几个 bit
 	div, mod := index>>3, index&0x07
 	return int((uint(bitmap.data[div]) & (1 << uint(7-mod))) >> uint(7-mod))
 }
