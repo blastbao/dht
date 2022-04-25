@@ -40,8 +40,7 @@ func newBitmap(size int) *bitmap {
 // newBitmapFrom returns a new copyed bitmap pointer which
 // newBitmap.data = other.data[:size].
 //
-//
-//
+// 创建一个有 size 个 bits 的位图 this ，并将前 other 中 other.size 个 bit 拷贝过来。
 func newBitmapFrom(other *bitmap, size int) *bitmap {
 	// 构造一个能容纳 size 个 bits 的位图
 	bitmap := newBitmap(size)

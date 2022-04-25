@@ -161,16 +161,16 @@ type kbucket struct {
 	nodes       *keyedDeque	// 节点
 	candidates  *keyedDeque // 候选节点
 	lastChanged time.Time   // 最后更新时间
-	prefix      *bitmap     // 前缀
+	prefix      *bitmap     // kad 树前缀
 }
 
 // newKBucket returns a new kbucket pointer.
 func newKBucket(prefix *bitmap) *kbucket {
 	bucket := &kbucket{
-		nodes:       newKeyedDeque(),
-		candidates:  newKeyedDeque(),
-		lastChanged: time.Now(),
-		prefix:      prefix,
+		nodes:       newKeyedDeque(),	// 节点
+		candidates:  newKeyedDeque(),	// 候选节点
+		lastChanged: time.Now(),		// 最近修改
+		prefix:      prefix,			// kad 树前缀
 	}
 	return bucket
 }
@@ -202,11 +202,16 @@ func (bucket *kbucket) UpdateTimestamp() {
 // Insert inserts node to the bucket. It returns whether the node is new in
 // the bucket.
 func (bucket *kbucket) Insert(no *node) bool {
+	// 检查 NodeId 是否已经存在
 	isNew := !bucket.nodes.HasKey(no.id.RawString())
 
+	// 插入 <NodeId, *Node> 到 nodes 中
 	bucket.nodes.Push(no.id.RawString(), no)
+
+	// 更新最近修改时间
 	bucket.UpdateTimestamp()
 
+	// 是否为新增节点
 	return isNew
 }
 
@@ -298,9 +303,10 @@ func (tableNode *routingTableNode) SetKBucket(bucket *kbucket) {
 }
 
 // Split splits current routingTableNode and sets it's two children.
+//
+// 将当前节点拆分到两个子节点
 func (tableNode *routingTableNode) Split() {
-
-	// 位于 kad 数的第几层
+	// 当前节点位于 kad 树的第几层
 	prefixLen := tableNode.KBucket().prefix.Size
 
 	// 如果是最底层，就不要再分裂了
@@ -308,30 +314,49 @@ func (tableNode *routingTableNode) Split() {
 		return
 	}
 
-	// 分裂为左右两个子节点
+	// 将当前节点分裂为左右两个子节点
 	for i := 0; i < 2; i++ {
 		// 创建一个有 prefixLen+1 个 bits 的位图，并将前 prefixLen 个 bit 拷贝过来。
 		bmap := newBitmapFrom(tableNode.KBucket().prefix, prefixLen+1)
-		//
+		// 基于 bmap 创建一个 kad 树节点。
 		rtnode := newRoutingTableNode(bmap)
-		//
+		// 把新建的 kad 节点作为本 node 的 i 子节点，即左/右子节点。
 		tableNode.SetChild(i, rtnode)
 	}
 
 	tableNode.Lock()
+	// 这里把当前节点的右子树(根)节点的 bitmap 的第 prefixLen 位置为 1 ，相当于更新该节点的 prefix 。
+	//
+	// 例如: prefix(node) = 1001 , prefix(node.left) = 01001, prefix(node.right) = 11001 。
+	// 注意: 位图是从右向左增长的，且起始位从 0 开始，所以和 prefixLen 相差 1 。
+	//
+	// 注意，prefixLen 和 bitmap 中的位 index 不是等值对应的，prefixLen 是长度，而 index 是从 0 开始计数的，
+	// 所以，假设当前 node 的 prefixLen 为 10 ，则其子节点的 prefixLen 为 11 ，相应的，其子节点对应 bitmap 的第 10 位。
+	// 也就是说，bit index = prefixLen - 1
 	tableNode.children[1].bucket.prefix.Set(prefixLen)
 	tableNode.Unlock()
 
+	// 将当前节点的 k 桶内节点拆分到左右子树中
 	for e := range tableNode.KBucket().nodes.Iter() {
+		// 当前节点
 		nd := e.Value.(*node)
-		tableNode.Child(nd.id.Bit(prefixLen)).KBucket().nodes.PushBack(nd)
+		// 判断其归属于左、右子树
+		leftOrRight := nd.id.Bit(prefixLen)
+		// 保存到左、右子树
+		tableNode.Child(leftOrRight).KBucket().nodes.PushBack(nd)
 	}
 
+	// 将当前节点的 k 桶内候选节点拆分到左右子树中
 	for e := range tableNode.KBucket().candidates.Iter() {
+		// 当前节点
 		nd := e.Value.(*node)
-		tableNode.Child(nd.id.Bit(prefixLen)).KBucket().candidates.PushBack(nd)
+		// 判断其归属于左、右子树
+		leftOrRight := nd.id.Bit(prefixLen)
+		// 保存到左、右子树
+		tableNode.Child(leftOrRight).KBucket().candidates.PushBack(nd)
 	}
 
+	// 更新两子树的最近更新时间
 	for i := 0; i < 2; i++ {
 		tableNode.Child(i).KBucket().UpdateTimestamp()
 	}
@@ -344,8 +369,8 @@ type routingTable struct {
 	*sync.RWMutex
 	k              int
 	root           *routingTableNode
-	cachedNodes    *syncedMap
-	cachedKBuckets *keyedDeque
+	cachedNodes    *syncedMap 			// 缓存 <addr, node>
+	cachedKBuckets *keyedDeque 			// 缓存 <prefix, bucket>
 	dht            *DHT
 	clearQueue     *syncedList
 }
@@ -401,38 +426,54 @@ func (rt *routingTable) Insert(nd *node) bool {
 		// 子树为空，但是当前树的k-桶未满或者 NodeId 已经存在于 k-桶中，则直接插入。
 		} else if root.KBucket().nodes.Len() < rt.k || root.KBucket().nodes.HasKey(nd.id.RawString()) {
 
+			// 取当前节点的 k 桶
 			bucket = root.KBucket()
+			// 插入到当前节点的 k 桶中
 			isNew := bucket.Insert(nd)
 
+			// 缓存 <addr, node>
 			rt.cachedNodes.Set(nd.addr.String(), nd)
+			// 缓存 <prefix, bucket>
 			rt.cachedKBuckets.Push(bucket.prefix.String(), bucket)
+
 			return isNew
 
 		// 子树为空，但是当前树的k-桶已满且 NodeId 不存在于 k-桶中，且
 		} else if root.KBucket().prefix.Compare(nd.id, prefixLen-1) == 0 {
+
 			// If node has the same prefix with bucket, split it.
 
+			// 将当前节点拆分到两个子节点
 			root.Split()
 
+			// 删除当前节点所关联的 <prefix, bucket> 缓存项
 			rt.cachedKBuckets.Delete(root.KBucket().prefix.String())
+			// 重置当前节点的 k 桶
 			root.SetKBucket(nil)
 
+			// 缓存子节点所关联的 <prefix, bucket>
 			for i := 0; i < 2; i++ {
-				bucket = root.Child(i).KBucket()
-				rt.cachedKBuckets.Push(bucket.prefix.String(), bucket)
+				nodeBucket := root.Child(i).KBucket()
+				nodePrefix := nodeBucket.prefix.String()
+				rt.cachedKBuckets.Push(nodePrefix, nodeBucket)
 			}
 
+			// 根据 nodeId 的第 (prefixLen - 1) 位决定继续向左、右子树查找
 			root = root.Child(nd.id.Bit(prefixLen - 1))
+
 		} else {
 
-
 			// Finally, store node as a candidate and fresh the bucket.
+
+			// 将 node 添加到当前节点的候选列表
 			root.KBucket().candidates.PushBack(nd)
+
+			// 如果候选节点数超过限制，就按 FIFO 移除一个旧节点
 			if root.KBucket().candidates.Len() > rt.k {
-				root.KBucket().candidates.Remove(
-					root.KBucket().candidates.Front())
+				root.KBucket().candidates.Remove(root.KBucket().candidates.Front())
 			}
 
+			// 刷新
 			go root.KBucket().Fresh(rt.dht)
 			return false
 		}
@@ -443,7 +484,6 @@ func (rt *routingTable) Insert(nd *node) bool {
 
 // GetNeighbors returns the size-length nodes closest to id.
 func (rt *routingTable) GetNeighbors(id *bitmap, size int) []*node {
-	//
 	rt.RLock()
 	nodes := make([]interface{}, 0, rt.cachedNodes.Len())
 	for item := range rt.cachedNodes.Iter() {
@@ -466,7 +506,6 @@ func (rt *routingTable) GetNeighbors(id *bitmap, size int) []*node {
 
 // GetNeighborCompactInfos return the size-length compact node info closest to id.
 func (rt *routingTable) GetNeighborCompactInfos(id *bitmap, size int) []string {
-
 	// 从 nodes 中查找距离 id 最近的 size 个节点。
 	neighbors := rt.GetNeighbors(id, size)
 
@@ -483,7 +522,6 @@ func (rt *routingTable) GetNeighborCompactInfos(id *bitmap, size int) []string {
 // GetNodeKBucketByID returns node whose id is `id` and the bucket it
 // belongs to.
 func (rt *routingTable) GetNodeKBucketByID(id *bitmap) (nd *node, bucket *kbucket) {
-
 	rt.RLock()
 	defer rt.RUnlock()
 
@@ -492,22 +530,21 @@ func (rt *routingTable) GetNodeKBucketByID(id *bitmap) (nd *node, bucket *kbucke
 
 	// 最多搜寻 160 个 bit
 	for prefixLen := 1; prefixLen <= maxPrefixLength; prefixLen++ {
-
 		// 取第 i 个 bit 值( 0 or 1 ) ，进而定位到是 root 的左子树，还是右子树。
 		next = root.Child(id.Bit(prefixLen - 1))
-
-		// 为空，则查找结束
+		// 为空，则找到叶节点
 		if next == nil {
-
-			//
+			// 从当前节点的 K 桶中查找 id
 			v, ok := root.KBucket().nodes.Get(id.RawString())
+			// 不存在，直接返回
 			if !ok {
 				return
 			}
-
+			// 若存在，则返回 node 和 bucket
 			nd, bucket = v.Value.(*node), root.KBucket()
 			return
 		}
+		// 非空，继续向下查找
 		root = next
 	}
 	return

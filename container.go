@@ -190,6 +190,7 @@ func (slist *syncedList) Iter() <-chan *list.Element {
 	ch := make(chan *list.Element)
 	go func() {
 		slist.RLock()
+		// 遍历 list ，逐个写入 ch 中
 		for e := slist.queue.Front(); e != nil; e = e.Next() {
 			ch <- e
 		}
@@ -219,7 +220,7 @@ func newKeyedDeque() *keyedDeque {
 
 // Push pushs a keyed-value to the end of deque.
 //
-// 插入 key-val
+// 插入 <NodeId, *Node>
 func (deque *keyedDeque) Push(key interface{}, val interface{}) {
 	deque.Lock()
 	defer deque.Unlock()
