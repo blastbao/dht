@@ -253,6 +253,8 @@ func (bucket *kbucket) Fresh(dht *DHT) {
 }
 
 // routingTableNode represents routing table tree node.
+//
+// k-tree 节点
 type routingTableNode struct {
 	sync.RWMutex
 	children []*routingTableNode	// 子节点列表，因为是二叉树，最多有 2 个子节点
@@ -367,8 +369,8 @@ func (tableNode *routingTableNode) Split() {
 // 路由表
 type routingTable struct {
 	*sync.RWMutex
-	k              int
-	root           *routingTableNode
+	k              int					// k
+	root           *routingTableNode	// k-tree 根节点
 	cachedNodes    *syncedMap 			// 缓存 <addr, node>
 	cachedKBuckets *keyedDeque 			// 缓存 <prefix, bucket>
 	dht            *DHT
@@ -377,8 +379,11 @@ type routingTable struct {
 
 // newRoutingTable returns a new routingTable pointer.
 func newRoutingTable(k int, dht *DHT) *routingTable {
+
+	// k-tree 根节点
 	root := newRoutingTableNode(newBitmap(0))
 
+	//
 	rt := &routingTable{
 		RWMutex:        &sync.RWMutex{},
 		k:              k,
@@ -389,6 +394,7 @@ func newRoutingTable(k int, dht *DHT) *routingTable {
 		clearQueue:     newSyncedList(),
 	}
 
+	//
 	rt.cachedKBuckets.Push(root.bucket.prefix.String(), root.bucket)
 	return rt
 }
@@ -484,6 +490,7 @@ func (rt *routingTable) Insert(nd *node) bool {
 
 // GetNeighbors returns the size-length nodes closest to id.
 func (rt *routingTable) GetNeighbors(id *bitmap, size int) []*node {
+	// 取所有已知 nodes
 	rt.RLock()
 	nodes := make([]interface{}, 0, rt.cachedNodes.Len())
 	for item := range rt.cachedNodes.Iter() {

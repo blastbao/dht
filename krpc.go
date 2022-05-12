@@ -603,34 +603,34 @@ func handleRequest(dht *DHT, addr *net.UDPAddr, response map[string]interface{})
 			dht.OnGetPeers(infoHash, addr.IP.String(), addr.Port)
 		}
 
+	//
 	case announcePeerType:
+
+		// 参数检查
 		if err := ParseKeys(a, [][]string{
 			{"info_hash", "string"},
 			{"port", "int"},
 			{"token", "string"}}); err != nil {
-
 			send(dht, addr, makeError(t, protocolError, err.Error()))
 			return
 		}
 
+		//
 		infoHash := a["info_hash"].(string)
 		port := a["port"].(int)
 		token := a["token"].(string)
 
 		if !dht.tokenManager.check(addr, token) {
-			//			send(dht, addr, makeError(t, protocolError, "invalid token"))
+			// send(dht, addr, makeError(t, protocolError, "invalid token"))
 			return
 		}
 
-		if impliedPort, ok := a["implied_port"]; ok &&
-			impliedPort.(int) != 0 {
-
+		if impliedPort, ok := a["implied_port"]; ok && impliedPort.(int) != 0 {
 			port = addr.Port
 		}
 
 		if dht.IsStandardMode() {
 			dht.peersManager.Insert(infoHash, newPeer(addr.IP, port, token))
-
 			send(dht, addr, makeResponse(t, map[string]interface{}{
 				"id": dht.id(id),
 			}))

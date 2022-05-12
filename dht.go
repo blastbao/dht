@@ -27,27 +27,44 @@ var (
 
 // Config represents the configure of dht.
 type Config struct {
+
 	// in mainline dht, k = 8
 	K int
+
 	// for crawling mode, we put all nodes in one bucket, so KBucketSize may
 	// not be K
 	KBucketSize int
+
 	// candidates are udp, udp4, udp6
 	Network string
+
 	// format is `ip:port`
 	Address string
+
 	// the prime nodes through which we can join in dht network
+	//
+	// boost 节点
 	PrimeNodes []string
+
 	// the kbucket expired duration
+	//
+	// k-bucket 过期时间
 	KBucketExpiredAfter time.Duration
+
 	// the node expired duration
+	//
+	// 节点过期时间
 	NodeExpriedAfter time.Duration
+
 	// how long it checks whether the bucket is expired
 	CheckKBucketPeriod time.Duration
+
 	// peer token expired duration
 	TokenExpiredAfter time.Duration
+
 	// the max transaction id
 	MaxTransactionCursor uint64
+
 	// how many nodes routing table can hold
 	MaxNodes int
 	// callback when got get_peers request
@@ -293,7 +310,7 @@ func (dht *DHT) GetPeers(infoHash string) error {
 		dht.routingTable.Len(),
 	)
 
-	// ???
+	// 发送请求给 neighbors ，查询 infoHash 的存储节点
 	for _, no := range neighbors {
 		dht.transactionManager.getPeers(no, infoHash)
 	}
