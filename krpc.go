@@ -8,10 +8,83 @@ import (
 	"time"
 )
 
+
+
+// BEP-0005 协议
+//
+// 一条 KRPC 消息可以代表请求 request ，也可以代表响应 response ，由字典组成。
+//
+//
+//
+// ping:
+//	检测节点是否可达，请求包含一个参数 id ，代表该节点的 nodeID ，对应的回复也应该包含回复者的 nodeID 。
+//
+//	ping Query = {"t":"aa", "y":"q", "q":"ping", "a":{"id":"abcdefghij0123456789"}}
+//	bencoded = d1:ad2:id20:abcdefghij0123456789e1:q4:ping1:t2:aa1:y1:qe
+//
+//	ping Response = {"t":"aa", "y":"r", "r": {"id":"mnopqrstuvwxyz123456"}}
+//	bencoded = d1:rd2:id20:mnopqrstuvwxyz123456e1:t2:aa1:y1:re
+//
+//
+// find_node:
+//	find_node 被用来查找给定 ID 的 DHT 节点的联系信息，该请求包含两个参数 id (代表该节点的 nodeID )和 target 。
+//	回复中应该包含被请求节点的路由表中距离 target 最接近的 K 个 nodeID 以及对应的 nodeINFO 。
+//
+// 	find_node 请求包含 2 个参数，第一个参数是 id，包含了请求节点的ID；第二个参数是 target，包含了请求者正在查找的节点的 ID 。
+//
+//	当一个节点接收到了 find_node 的请求，他应该给出对应的回复，回复中包含 2 个关键字 id(被请求节点的id) 和 nodes，
+//  其中	nodes 是字符串类型，包含了被请求节点的路由表中最接近目标节点的 K(8) 个最接近的节点的联系信息，
+//  被请求方每次都统一返回最靠近目标节点的节点列表 K 桶。
+//
+//	参数: {"id" : "<querying nodes id>", "target" : "<id of target node>"}
+//	回复: {"id" : "<queried nodes id>", "nodes" : "<compact node info>"}
+//
+//
+//	这里要明确3个概念
+//		1. 请求方的 id : 发起这个 DHT 节点寻址的节点自身的 ID ，可以类比 DNS 查询中的客户端
+//		2. 目标 target id : 需要查询的目标ID号，可以类比于 DNS 查询中的 URL ，这个 ID 在整个递归查询中是一直不变的
+//		3. 被请求节点的 id : 在节点的递归查询中，请求方由远及近不断询问整个链路上的节点，沿途的每个节点在返回时都要带上自己的 id 号
+//
+//	find_node Query = {"t":"aa", "y":"q", "q":"find_node", "a": {"id":"abcdefghij0123456789", "target":"mnopqrstuvwxyz123456"}}
+//	# "id" containing the node ID of the querying node, and "target" containing the ID of the node sought by the queryer.
+//	bencoded = d1:ad2:id20:abcdefghij01234567896:target20:mnopqrstuvwxyz123456e1:q9:find_node1:t2:aa1:y1:qe
+//
+//	find_node Response = {"t":"aa", "y":"r", "r": {"id":"0123456789abcdefghij", "nodes": "def456..."}}
+//	bencoded = d1:rd2:id20:0123456789abcdefghij5:nodes9:def456...e1:t2:aa1:y1:re
+//
+//
+//
+// get_peers
+//
+//	1. get_peers 请求包含 2 个参数：
+//		- id 请求节点 ID
+//		- info_hash 代表 torrent 文件的 infohash ，infohash 为种子文件的 SHA1 哈希值，也就是磁力链接的 btih 值
+//	2. get_peers 响应:
+//    1) 如果被请求的节点有对应 info_hash 的 peers，他将返回一个关键字 values，这是一个列表类型的字符串。
+//       每一个字符串包含了 "CompactIP-address/portinfo" 格式的 peers 信息(即对应的机器ip/port信息)，
+//       peer 的 info 信息和 DHT 节点的 info 信息是一样的。
+//    2) 如果被请求的节点没有这个 infohash 的 peers ，那么他将返回关键字 nodes 。
+//       需要注意的是，如果该节点没有对应的 infohash 信息，而只是返回了nodes，
+//       则请求方会认为该节点是一个"可疑节点"，则会从自己的路由表 K 捅中删除该节点，
+//       这个 nodes 包含了被请求节点的路由表中离 info_hash 最近的 K 个节点(我这里没有该节点，去别的节点试试运气)，
+//       nodes 使用 "Compactnodeinfo" 格式编码，在这两种情况下，关键字 token 都将被返回。
+//       token 关键字在今后的 annouce_peer 请求中必须要携带。
+//       token 是一个短的二进制字符串。
+//
+//
+//
 const (
+	// 检测节点是否可达
 	pingType         = "ping"
+
+	// 根据 ID 查找节点。
+	// 被请求节点会回复其路由表中，距离给定 ID 最近的 K 个 nodeId 信息，并且被请求节点会将请求节点的信息加入到自身的路由表中。
 	findNodeType     = "find_node"
+
+	// 请求获取 info_hash 信息
 	getPeersType     = "get_peers"
+
+	// 表明正在下载 torrent 文件
 	announcePeerType = "announce_peer"
 )
 
@@ -108,7 +181,7 @@ func makeQuery(t, q string, a map[string]interface{}) map[string]interface{} {
 		"t": t,		// transId
 		"y": "q",	// query
 		"q": q,		// query type
-		"a": a,		// params
+		"a": a,		// query params
 	}
 }
 
@@ -118,8 +191,8 @@ func makeQuery(t, q string, a map[string]interface{}) map[string]interface{} {
 func makeResponse(t string, r map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"t": t,		// transactionID
-		"y": "r",	// response
-		"r": r,		// params
+		"y": "r",	// response type
+		"r": r,		// response params
 	}
 }
 
@@ -157,9 +230,9 @@ type query struct {
 
 // transaction implements transaction.
 type transaction struct {
-	*query
-	id       string
-	response chan struct{}
+	*query						// query
+	id       string				// transId
+	response chan struct{}		// response
 }
 
 // transactionManager represents the manager of transactions.
@@ -258,10 +331,12 @@ func (tm *transactionManager) transaction(key string, keyType int) *transaction 
 
 	sm := tm.transactions
 
+	//
 	if keyType == 1 {
 		sm = tm.index
 	}
 
+	// 查询 trans
 	v, ok := sm.Get(key)
 	if !ok {
 		return nil
@@ -282,10 +357,12 @@ func (tm *transactionManager) getByIndex(index string) *transaction {
 
 // transaction gets the proper transaction with whose id is transId and
 // address is addr.
-func (tm *transactionManager) filterOne(
-	transID string, addr *net.UDPAddr) *transaction {
+func (tm *transactionManager) filterOne(transID string, addr *net.UDPAddr) *transaction {
 
+	// 根据 transId 查询 trans
 	trans := tm.getByTransID(transID)
+
+	// 不存在，或者不匹配，返回 nil
 	if trans == nil || trans.node.addr.String() != addr.String() {
 		return nil
 	}
@@ -381,6 +458,8 @@ func (tm *transactionManager) findNode(no *node, target string) {
 }
 
 // getPeers sends get_peers query to the chan.
+//
+// 发请求给 no ，根据 info_hash 查询 peers 。
 func (tm *transactionManager) getPeers(no *node, infoHash string) {
 	// 发送 getPeers 到 no 节点
 	tm.sendQuery(no, getPeersType, map[string]interface{}{
@@ -556,8 +635,7 @@ func handleRequest(dht *DHT, addr *net.UDPAddr, response map[string]interface{})
 
 		}
 	case getPeersType:
-
-		// 参数检查
+		// 提取 info_hash 参数
 		if err := ParseKey(a, "info_hash", "string"); err != nil {
 			send(dht, addr, makeError(t, protocolError, err.Error()))
 			return
@@ -652,36 +730,54 @@ func handleRequest(dht *DHT, addr *net.UDPAddr, response map[string]interface{})
 // findOn puts nodes in the response to the routingTable, then if target is in
 // the nodes or all nodes are in the routingTable, it stops. Otherwise it
 // continues to findNode or getPeers.
+//
+// findOn 将节点放在 routingTable 的响应中，如果目标在节点中或者所有节点都在routingTable中，就停止。
+// 否则继续 findNode 或 getPeers 。
+//
+//
 func findOn(dht *DHT, r map[string]interface{}, target *bitmap, queryType string) error {
-
+	// 从 r 中提取 nodes 参数，它包含若干 nodeInfos ，每个 nodeInfo 是 26 位字符串，所有 nodes 需要是 26 的整数倍。
 	if err := ParseKey(r, "nodes", "string"); err != nil {
 		return err
 	}
-
 	nodes := r["nodes"].(string)
 	if len(nodes)%26 != 0 {
 		return errors.New("the length of nodes should can be divided by 26")
 	}
 
 	hasNew, found := false, false
-	for i := 0; i < len(nodes)/26; i++ {
-		no, _ := newNodeFromCompactInfo(
-			string(nodes[i*26:(i+1)*26]), dht.Network)
 
+	// 解析并遍历 nodeInfos
+	for i := 0; i < len(nodes)/26; i++ {
+
+		// 提取 nodeInfo ，它是 26 位字符串:
+		//	1) nodeInfo[ 0:20] => node id
+		//  2) nodeInfo[20:26] => addr(ip, port)
+		nodeInfo := string(nodes[i*26:(i+1)*26])
+
+		// 基于 nodeInfo 创建 *node
+		no, _ := newNodeFromCompactInfo(nodeInfo, dht.Network)
+
+		// 如果返回的 nodeId 恰好为查询的 target ，设置 found ~
 		if no.id.RawString() == target.RawString() {
 			found = true
 		}
 
+		// 将 *node 插入到路由表，如果是新增节点，设置 hasNew ～
 		if dht.routingTable.Insert(no) {
 			hasNew = true
 		}
 	}
 
+	// 如果成功查找到 target ，或者所有节点均已存在于路由表中，就直接返回。
 	if found || !hasNew {
 		return nil
 	}
 
+	// 至此，意味着未成功查找到 target ，需要继续查询。
+
 	targetID := target.RawString()
+	// 返回距离 targetID 最近的(最多) K 个 *node
 	for _, no := range dht.routingTable.GetNeighbors(target, dht.K) {
 		switch queryType {
 		case findNodeType:
@@ -692,6 +788,7 @@ func findOn(dht *DHT, r map[string]interface{}, target *bitmap, queryType string
 			panic("invalid find type")
 		}
 	}
+
 	return nil
 }
 
@@ -700,75 +797,102 @@ func handleResponse(dht *DHT, addr *net.UDPAddr, response map[string]interface{}
 	// transId
 	t := response["t"].(string)
 
-	//
+	// trans
 	trans := dht.transactionManager.filterOne(t, addr)
 	if trans == nil {
 		return
 	}
 
 	// inform transManager to delete the transaction.
+	//
+	// 参数校验：检测 response[r] 是否存在
 	if err := ParseKey(response, "r", "map"); err != nil {
 		return
 	}
 
+	// query type
 	q := trans.data["q"].(string)
+	// query params
 	a := trans.data["a"].(map[string]interface{})
-	r := response["r"].(map[string]interface{})
 
+	// response params
+	r := response["r"].(map[string]interface{})
 	if err := ParseKey(r, "id", "string"); err != nil {
 		return
 	}
 
+	// response node id
 	id := r["id"].(string)
 
-	// If response's node id is not the same with the node id in the
-	// transaction, raise error.
+	// If response's node id is not the same with the node id in the transaction, raise error.
+	//
+	// 检查 nodeId 是否和 response[r].id 相匹配，如果不匹配，则回包者可能有问题，需要把回包者加入黑名单，并将其从路由表中移除。
 	if trans.node.id != nil && trans.node.id.RawString() != r["id"].(string) {
 		dht.blackList.insert(addr.IP.String(), addr.Port)
 		dht.routingTable.RemoveByAddr(addr.String())
 		return
 	}
 
+
+	// 构造 response 节点
 	node, err := newNode(id, addr.Network(), addr.String())
 	if err != nil {
 		return
 	}
 
+	// 根据 query type 做对应处理
 	switch q {
 	case pingType:
 	case findNodeType:
+		// ignore, 没啥用
 		if trans.data["q"].(string) != findNodeType {
 			return
 		}
 
+		// 从查询参数中提取 target
 		target := trans.data["a"].(map[string]interface{})["target"].(string)
+
+		//
 		if findOn(dht, r, newBitmapFromString(target), findNodeType) != nil {
 			return
 		}
+
+	// 根据
 	case getPeersType:
+
+		// 从 resp.Params 中提取 token 参数
 		if err := ParseKey(r, "token", "string"); err != nil {
 			return
 		}
-
 		token := r["token"].(string)
+
+		// 从 req.Params 中提取 info_hash 参数
 		infoHash := a["info_hash"].(string)
 
+		// 从 resp.Params 中提取 values 参数
 		if err := ParseKey(r, "values", "list"); err == nil {
 			values := r["values"].([]interface{})
 			for _, v := range values {
+
+				// v 即为 "IP:Port" ，这里创建 *peer
 				p, err := newPeerFromCompactIPPortInfo(v.(string), token)
 				if err != nil {
 					continue
 				}
+
+				// 把 <infoHash, *peer> 插入到 dht 中
 				dht.peersManager.Insert(infoHash, p)
+
+				// 回调函数
 				if dht.OnGetPeersResponse != nil {
 					dht.OnGetPeersResponse(infoHash, p)
 				}
 			}
-		} else if findOn(
-			dht, r, newBitmapFromString(infoHash), getPeersType) != nil {
+		//
+		} else if findOn(dht, r, newBitmapFromString(infoHash), getPeersType) != nil {
 			return
 		}
+
 	case announcePeerType:
 	default:
 		return
@@ -784,8 +908,7 @@ func handleResponse(dht *DHT, addr *net.UDPAddr, response map[string]interface{}
 }
 
 // handleError handles errors received from udp.
-func handleError(dht *DHT, addr *net.UDPAddr,
-	response map[string]interface{}) (success bool) {
+func handleError(dht *DHT, addr *net.UDPAddr, response map[string]interface{}) (success bool) {
 
 	if err := ParseKey(response, "e", "list"); err != nil {
 		return
@@ -795,9 +918,7 @@ func handleError(dht *DHT, addr *net.UDPAddr,
 		return
 	}
 
-	if trans := dht.transactionManager.filterOne(
-		response["t"].(string), addr); trans != nil {
-
+	if trans := dht.transactionManager.filterOne(response["t"].(string), addr); trans != nil {
 		trans.response <- struct{}{}
 	}
 

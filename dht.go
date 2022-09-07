@@ -273,6 +273,7 @@ func (dht *DHT) listen() {
 // the dht's node id.
 //
 //
+//
 func (dht *DHT) id(target string) string {
 	// 返回本机 NodeId
 	if dht.IsStandardMode() || target == "" {

@@ -14,9 +14,9 @@ const maxPrefixLength = 160
 
 // node represents a DHT node.
 type node struct {
-	id             *bitmap
-	addr           *net.UDPAddr
-	lastActiveTime time.Time
+	id             *bitmap			// 节点 ID
+	addr           *net.UDPAddr		// 节点 Addr
+	lastActiveTime time.Time		// 最近活跃时间
 }
 
 // newNode returns a node pointer.
@@ -36,14 +36,15 @@ func newNode(id, network, address string) (*node, error) {
 }
 
 // newNodeFromCompactInfo parses compactNodeInfo and returns a node pointer.
-func newNodeFromCompactInfo(
-	compactNodeInfo string, network string) (*node, error) {
+func newNodeFromCompactInfo(compactNodeInfo string, network string) (*node, error) {
 
 	if len(compactNodeInfo) != 26 {
 		return nil, errors.New("compactNodeInfo should be a 26-length string")
 	}
 
+	// 节点 ID
 	id := compactNodeInfo[:20]
+	// 节点 Addr
 	ip, port, _ := decodeCompactIPPortInfo(compactNodeInfo[20:])
 
 	return newNode(id, network, genAddress(ip.String(), port))
@@ -101,7 +102,7 @@ func (p *Peer) CompactIPPortInfo() string {
 // peersManager represents a proxy that manipulates peers.
 type peersManager struct {
 	sync.RWMutex
-	table *syncedMap
+	table *syncedMap	// <info_hash, *dequeue>
 	dht   *DHT
 }
 
@@ -116,15 +117,18 @@ func newPeersManager(dht *DHT) *peersManager {
 // Insert adds a peer into peersManager.
 func (pm *peersManager) Insert(infoHash string, peer *Peer) {
 	pm.Lock()
+	// 如果 infoHash 是首次出现，则初始化 dequeue 。
 	if _, ok := pm.table.Get(infoHash); !ok {
 		pm.table.Set(infoHash, newKeyedDeque())
 	}
 	pm.Unlock()
 
+	// 将 <"IP:PORT", *peer> 保存到 info_hash 的 dequeue 中。
 	v, _ := pm.table.Get(infoHash)
 	queue := v.(*keyedDeque)
-
 	queue.Push(peer.CompactIPPortInfo(), peer)
+
+	// FIFO 淘汰
 	if queue.Len() > pm.dht.K {
 		queue.Remove(queue.Front())
 	}
@@ -489,6 +493,8 @@ func (rt *routingTable) Insert(nd *node) bool {
 }
 
 // GetNeighbors returns the size-length nodes closest to id.
+//
+// 返回距离 id 最近的(最多) size 个 *node 。
 func (rt *routingTable) GetNeighbors(id *bitmap, size int) []*node {
 	// 取所有已知 nodes
 	rt.RLock()
